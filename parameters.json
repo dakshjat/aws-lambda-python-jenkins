@@ -1,0 +1,12 @@
+{
+    "Parameters": {
+        "Environment": "<Environment>",
+        "Name": "<Name>",
+        "VpcId": "<VpcId>",
+        "SubnetId1": "<SubnetId1>",
+        "SubnetId2": "<SubnetId2>",
+        "JenkinsServer": "<JenkinsServer>",
+        "JenkinsUsername": "<JenkinsUsername>",
+        "JenkinsPassword": "<JenkinsPassword>"
+    }
+}

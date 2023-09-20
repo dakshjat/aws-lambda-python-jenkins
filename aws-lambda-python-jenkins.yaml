@@ -1,0 +1,323 @@
+---
+AWSTemplateFormatVersion: 2010-09-09
+Description: Python Jenkins API Orchestration
+
+Parameters:
+  Environment:
+    Type: String
+  Name:
+    Type: String
+  VpcId:
+    Type: String
+  SubnetId1:
+    Type: String
+  SubnetId2:
+    Type: String
+  JenkinsServer:
+    Type: String
+  JenkinsUsername:
+    Type: String
+  JenkinsPassword:
+    Type: String
+    NoEcho: true
+
+Resources:
+  JenkinsServerSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/jenkins/server'
+      Description: 'Jenkins Server'
+      SecretString: !Ref JenkinsServer
+      KmsKeyId: alias/aws/secretsmanager
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-${Name}-jenkins-server'
+        - Key: Environment
+          Value: !Ref Environment
+  JenkinsUsernameSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/jenkins/username'
+      Description: 'Jenkins Username'
+      SecretString: !Ref JenkinsUsername
+      KmsKeyId: alias/aws/secretsmanager
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-${Name}-jenkins-username'
+        - Key: Environment
+          Value: !Ref Environment
+  JenkinsPasswordSecret:
+    Type: AWS::SecretsManager::Secret
+    Properties:
+      Name: !Sub '/jenkins/password'
+      Description: 'Jenkins Password/API Token'
+      SecretString: !Ref JenkinsPassword
+      KmsKeyId: alias/aws/secretsmanager
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-${Name}-jenkins-password'
+        - Key: Environment
+          Value: !Ref Environment
+  JenkinsResourceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: !Sub '${Environment}-${Name}-role'
+      AssumeRolePolicyDocument:
+        Version: 2012-10-17
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service:
+                - lambda.amazonaws.com
+            Action:
+              - 'sts:AssumeRole'
+      Path: /
+      Policies:
+        - PolicyName: !Sub '${Environment}-${Name}-role-policy'
+          PolicyDocument:
+            Version: 2012-10-17
+            Statement:
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:*'
+              - Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                Resource: !Sub 'arn:aws:logs:${AWS::Region}:${AWS::AccountId}:log-group:/aws/lambda/*'
+              - Effect: Allow
+                Action:
+                  - secretsmanager:GetSecretValue
+                Resource: !Sub 'arn:aws:secretsmanager:${AWS::Region}:${AWS::AccountId}:secret:/jenkins/*'
+              - Effect: Allow
+                Action:
+                  - kms:Decrypt
+                Resource: '*'
+              - Effect: Allow
+                Action:
+                  - ec2:DescribeNetworkInterfaces
+                  - ec2:CreateNetworkInterface
+                  - ec2:DeleteNetworkInterface
+                Resource: '*'
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-${Name}-jenkins-role'
+        - Key: Environment
+          Value: !Ref Environment
+  JenkinsLambdaSg:
+    Type: AWS::EC2::SecurityGroup
+    Properties:
+      GroupName: !Sub '${Environment}-${Name}-sg'
+      GroupDescription: !Sub '${Environment} ${Name} Security Group'
+      SecurityGroupEgress:
+        - CidrIp: 0.0.0.0/0
+          Description: Allow all outbound traffic by default
+          IpProtocol: '-1'
+      VpcId: !Ref VpcId
+      Tags:
+        - Key: Name
+          Value: !Sub '${Environment}-${Name}-jenkins-sg'
+        - Key: Environment
+          Value: !Ref Environment
+  JenkinsResourceFunction:
+      Type: AWS::Lambda::Function
+      Properties:
+        FunctionName: !Sub '${Environment}-${Name}-function'
+        Runtime: python3.11
+        Role:
+          Fn::GetAtt:
+            - JenkinsResourceRole
+            - Arn
+        Handler: index.lambda_handler
+        Description: Jenkins API Orchestration
+        Timeout: 180
+        MemorySize: 256
+        VpcConfig:
+          SecurityGroupIds:
+            - !Ref JenkinsLambdaSg
+          SubnetIds:
+            - !Ref SubnetId1
+            - !Ref SubnetId2
+        Code:
+          ZipFile: |
+            import jenkins
+            import boto3
+            import json
+
+            def validate(event, context, server):
+                try:
+                    print("***** Validation Started *****")
+
+                    user = server.get_whoami()
+                    version = server.get_version()
+                    print('Hello %s from Jenkins %s' % (user['fullName'], version))
+
+                    print("***** Validation Completed *****")
+                    return True
+
+                except Exception as e:
+                    print(f"An unexpected error occurred: {str(e)}")
+                    return "Exception"
+
+            def build(event, context, server):
+                try:
+                    print("***** Build Started *****")
+
+                    server.build_job(event['job'], event['parameters'])
+                    last_build_number = server.get_job_info(event['job'])['lastCompletedBuild']['number']
+                    build_info = server.get_build_info(event['job'], last_build_number)
+                    print("Build info: ", build_info)
+
+                    print("***** Build Completed *****")
+                    return build_info['number']
+
+                except Exception as e:
+                    print(f"An unexpected error occurred in build: {str(e)}")
+                    return "Exception"
+
+            def rebuild(event, context, server):
+                try:
+                    print("***** Rebuild Started *****")
+
+                    previous_build_info = server.get_build_info(event['job'], event['build_number'])
+                    print("Previous build info: ", previous_build_info)
+
+                    action_parameters = []
+                    for action in previous_build_info.get("actions", []):
+                        if action.get("_class", "") == "hudson.model.ParametersAction":
+                            action_parameters.extend(action.get("parameters", []))
+
+                    parameters = {}
+                    for item in action_parameters:
+                        name = item["name"]
+                        value = item["value"]
+                        parameters[name] = value
+
+                    server.build_job(event['job'], parameters)
+                    last_build_number = server.get_job_info(event['job'])['lastCompletedBuild']['number']
+                    build_info = server.get_build_info(event['job'], last_build_number)
+                    print("Build info: ", build_info)
+
+                    print("***** Rebuild Completed *****")
+                    return build_info['number']
+
+                except Exception as e:
+                    print(f"An unexpected error occurred in rebuild: {str(e)}")
+                    return "Exception"
+
+            def status(event, context, server):
+                try:
+                    print("***** Status/Monitor Started *****")
+
+                    build_info = server.get_build_info(event['job'], event['build_number'])
+                    print("Result: ", build_info['result'])
+
+                    print("***** Status/Monitor Completed *****")
+                    return build_info['result']
+
+                except Exception as e:
+                    print(f"An unexpected error occurred in status: {str(e)}")
+                    return "Exception"
+
+            def lambda_handler(event, context):
+                try:
+                    print("Event received: " + str(event))
+
+                    secretsmanager_client = boto3.client('secretsmanager')
+
+                    server = None
+                    response = secretsmanager_client.get_secret_value(
+                        SecretId = '/jenkins/server'
+                    )
+                    server = response['SecretString']
+
+                    username = None
+                    response = secretsmanager_client.get_secret_value(
+                        SecretId = '/jenkins/username'
+                    )
+                    username = response['SecretString']
+
+                    password = None
+                    response = secretsmanager_client.get_secret_value(
+                        SecretId = '/jenkins/password'
+                    )
+                    password = response['SecretString']
+
+                    server = jenkins.Jenkins(server, username=username, password=password)
+
+                    validate_response = validate(event, context, server)
+                    print("validate_response:", validate_response)
+
+                    if validate_response == "Exception":
+                        response_data = {
+                            "Message": "Validation failed"
+                        }
+                        response_body = json.dumps(response_data)
+
+                        return {
+                            'statusCode': 500,
+                            'body': response_body
+                        }
+                    elif event['action'] == "build":
+                        build_response = build(event, context, server)
+                        response_data = {
+                            "Message": "Build action completed",
+                            "Output": build_response
+                        }
+                        response_body = json.dumps(response_data)
+
+                        return {
+                            'statusCode': 200,
+                            'body': response_body
+                        }
+                    elif event['action'] == "rebuild":
+                        rebuild_response = rebuild(event, context, server)
+                        response_data = {
+                            "Message": "Rebuild action completed",
+                            "Output": rebuild_response
+                        }
+                        response_body = json.dumps(response_data)
+
+                        return {
+                            'statusCode': 200,
+                            'body': response_body
+                        }
+                    elif event['action'] == "status":
+                        status_response = status(event, context, server)
+                        response_data = {
+                            "Message": "Polling action completed",
+                            "Output": status_response
+                        }
+                        response_body = json.dumps(response_data)
+
+                        return {
+                            'statusCode': 200,
+                            'body': response_body
+                        }
+                    else:
+                        response_data = {
+                            "Message": "No action matched",
+                        }
+                        response_body = json.dumps(response_data)
+
+                        return {
+                            'statusCode': 200,
+                            'body': response_body
+                        }
+                except Exception as e:
+                    print(f"An unexpected error occurred: {str(e)}")
+        Tags:
+          - Key: Name
+            Value: !Sub '${Environment}-${Name}-jenkins-function'
+          - Key: Environment
+            Value: !Ref Environment
+
+Outputs:
+  JenkinsResourceRoleARN:
+    Value:
+      Fn::GetAtt:
+        - JenkinsResourceRole
+        - Arn
+  JenkinsResourceFunctionName:
+    Value: !Ref JenkinsResourceFunction
