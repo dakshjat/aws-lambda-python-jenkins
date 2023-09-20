@@ -47,7 +47,7 @@ ___
 }
 ```
 
-**#3. To validate the job result:**
+**#3. To validate a job result:**
 ```json
 {
     "job": "<full_project_name>",
