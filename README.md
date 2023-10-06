@@ -1,9 +1,21 @@
 # AWS Lambda Python Jenkins REST API
 
-Use the AWS CloudFormation template to create an AWS Lambda function to Orchestration Jenkins using Python Jenkins REST API.
+Use the AWS CloudFormation template to create an AWS Lambda function to enhance Jenkins automation capabilities using Python Jenkins REST API.
 
 ___
 ![Python Jenkins API Architecture Diagrams](https://github.com/dakshjat/aws-lambda-python-jenkins/assets/47545538/575acf8b-8292-4fcc-a73b-75d1f9b72d7a)
+___
+### Advantages and Use Cases
+
+* Automate various tasks in Jenkins, such as job creation, job configuration, and job triggering, making it easier to integrate Jenkins into the development workflow.
+
+* Streamline CI/CD (Continuous Integration/Continuous Deployment) processes by providing programmatic access to Jenkins, which can benefit large and complex projects.
+
+* Perform complex actions, customize Jenkins to meet specific needs, monitor build statuses, gather data, generate custom reports, etc.
+
+* Manage Jenkins configurations programmatically, making it easier to maintain and scale Jenkins setups.
+
+* Create custom Jenkins automation solutions tailored to the requirements.
 ___
 ### Prerequisites
 
